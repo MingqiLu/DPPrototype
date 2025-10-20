@@ -28,13 +28,13 @@ datasets = {
         'domain': 'General Demographics'
     },
 
-    # 'Student Performance': {
-    #     'url': 'https://raw.githubusercontent.com/lpanavas/DPEducationDatasets/master/student_performance.csv',
-    #     'description': 'This dataset contains student grades and demographic information.',
-    #     'count': 395,
-    #     'multiple_user_contributions': False,
-    #     'domain': 'Education'
-    # },
+    'Scatterplots': {
+        'url': 'https://raw.githubusercontent.com/MingqiLu/DPPrototype/refs/heads/master/finalData/0/gilgais.csv',
+        'description': 'Test.',
+        'count': 395,
+        'multiple_user_contributions': False,
+        'domain': 'General'
+    },
 
     # 'Online Retail': {
     #     'url': 'https://raw.githubusercontent.com/lpanavas/DPEducationDatasets/master/online_retail.csv',

@@ -1,2 +1,7 @@
 venv/
 venv
+Anaconda3-2025.06-0-Linux-x86_64.sh
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
