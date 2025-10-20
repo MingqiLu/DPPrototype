@@ -16,7 +16,7 @@ st.title('Visualization Playground')
 if 'selected_dataset' not in st.session_state:
     st.session_state['selected_dataset'] = None
 df = st.session_state['selected_dataset']
-tab1, tab2, tab3 = st.tabs(["Simulations", "One Query", "Multiple Queries"])
+tab1, tab2, tab3, tab4 = st.tabs(["Simulations", "One Query", "Multiple Queries", "Scatterplots"])
 
 # Initialize an empty list to store the numbers
 if 'simulations_parameter_selection' not in st.session_state:
@@ -625,6 +625,36 @@ with tab3:
 
 
 
+
+
+
+with tab4:
+    st.header("Scatterplots")
+    col1, col2 = st.columns([1, 2])  # Create two columns with a ratio of 1:2
+
+    with col1:  # Put the sliders in the first column
+        st.header("Parameters")
+        # st.write("Adjust the parameters to see how they affect the privacy budget.")
+        # k = st.slider('Number of queries', 1, 100)
+        # del_g = st.slider('Global Delta (log scale)', -8, -2)
+        # epsilon_g = st.slider('Global Epsilon', 0.01, 1.0)
+
+    with col2:  # Put the visualization in the second column
+        st.header("Visualization")
+        # compositors = compare(k, pow(10,del_g), .5, epsilon_g)
+        # dataframe = pd.DataFrame.from_dict(compositors, orient='index', columns=['Epsilon_0', 'Delta_0'])
+        # dataframe['Compositor'] = dataframe.index  # Add a new column with the index values
+        # fig = charts.compare_compositors(dataframe)
+        # fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=0, r=0, t=30, b=0))
+
+        # st.plotly_chart(fig, use_container_width=True)
+        # with st.expander("Explanation"):
+        #     st.markdown("""
+        #     This chart shows how different compositors affect the privacy budget.
+        #     The x-axis represents the type of compositor used.
+        #     The y-axis on the left represents the per query epsilon, and the y-axis on the right represents the per query delta.
+        #     You can adjust the parameters on the left to see how they affect the privacy budget.
+        #     """)
 
 
 
