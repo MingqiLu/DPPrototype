@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 
+from dp_scatterplots import generate_dp_scatter_grid
+
 st.set_page_config(layout="wide")
 st.session_state['active_page'] = 'Visualization_page'
 
@@ -563,72 +565,105 @@ def render_scatterplots(df):
     with col_control:
         st.subheader("Control Panel")
 
-        # 1) Mechanism
+        # 1) Mechanism 开关（现在主要用 multiselect）
         mech_enabled = st.checkbox("Mechanism", value=True, key="sc_mech_enabled")
-        st.session_state["sc_mechanism"] = st.selectbox(
-            "Mechanism",
-            ["AHP", "DAWA", "Laplace"],
-            index=1,
-            key="sc_mechanism_select",
-        )
 
-        # 2) Privacy ε
+        mechanisms_all = ["DAWA", "Laplace"]
+        if mech_enabled:
+            selected_mechanisms = st.multiselect(
+                "Mechanisms",
+                mechanisms_all,
+                default=["DAWA", "Laplace"],
+                key="sc_mechanism_select",
+            )
+        else:
+            selected_mechanisms = ["DAWA", "Laplace"]
+
+        # 2) Privacy ε – 这里 slider 控制 “中间一个 ε”，右侧网格仍然是固定几档 ε
         eps_enabled = st.checkbox("Privacy ε", value=True, key="sc_eps_enabled")
-        st.session_state["sc_eps"] = st.slider(
-            "ε",
-            0.01, 1.00, 0.10, 0.01,
-            key="sc_eps_slider",
-            help="Placeholder ε slider; the grid on the right still shows placeholder images.",
-        )
+        if eps_enabled:
+            eps_slider = st.slider(
+                "Base ε (for reference only)",
+                0.01,
+                1.00,
+                0.10,
+                0.01,
+                key="sc_eps_slider",
+                help="目前右侧展示的是一组固定的 ε= {0.5, 0.1, 0.05, 0.01}，这个 slider 只是给参与者感知用。",
+            )
+        else:
+            eps_slider = 0.1
 
-        # 3) Shift δ (log scale)
+        # 这里你以后要真的联动 delta / bins / gamma 再接进模块里，目前先保留 UI
         delta_enabled = st.checkbox("Shift δ", value=False, key="sc_delta_enabled")
         power = st.slider("log10 δ", -8, -2, -6, 1, key="sc_delta_log_power")
         st.session_state["sc_delta"] = 10 ** power
-        
-        # 4) Bin size
+
         bins_enabled = st.checkbox("Bin size", value=False, key="sc_bins_enabled")
-        st.session_state["sc_bins"] = st.slider(
-            "Bins", 4, 128, 32, 1, key="sc_bins_slider",
-            help="Placeholder bin size parameter.",
+        bins = st.slider(
+            "Bins", 4, 128, 64, 1, key="sc_bins_slider",
+            help="2D 直方图的网格大小。",
         )
 
-        # 5) Color γ
         gamma_enabled = st.checkbox("Color γ", value=False, key="sc_gamma_enabled")
-        st.session_state["sc_gamma"] = st.slider(
+        gamma = st.slider(
             "γ", 0.1, 3.0, 1.0, 0.1, key="sc_gamma_slider",
-            help="Placeholder color/contrast γ parameter.",
+            help="当前还没有真正接入颜色变换，只是 UI 占位。",
         )
 
-        # original image
+        generate_btn = st.button("Generate scatterplots", key="sc_generate_btn")
+
+        # 原始示例图（还可以保留）
         st.image(
             "image.png",
-            caption="Original Graph",
+            caption="Original Graph (reference)",
             use_container_width=False,
         )
 
     # ===== Right: Visualization Grid =====
     with col_display:
-        epsilons = ["ε=0.5", "ε=0.1", "ε=0.05", "ε=0.01"]
-        mechanisms = ["AHP", "DAWA", "Laplace"]
+        epsilons = [0.5, 0.1, 0.05, 0.01]
 
-        # Header (epsilon columns)
-        header_cols = st.columns(len(epsilons) + 1)
-        header_cols[0].markdown("### ")
-        for i, eps in enumerate(epsilons):
-            header_cols[i + 1].markdown(f"### {eps}")
+        st.subheader("DP Scatter / Heatmap Grid")
 
-        # Rows: mechanisms
-        for mech in mechanisms:
-            row_cols = st.columns(len(epsilons) + 1)
-            row_cols[0].markdown(f"### {mech}")
-            for i, _ in enumerate(epsilons):
-                with row_cols[i + 1]:
-                    # Placeholder image; replace with real plots later
-                    st.image(
-                        "image.png",
-                        use_container_width=True,
-                    )
+        # --- 自动识别/调整数据格式 ---
+        if df is None:
+            st.warning("请先选择或上传数据集。")
+            return
+
+        # 如果 dataset 只有两列，则自动把它们当作 x,y
+        if df.shape[1] == 2 and not {"x", "y"}.issubset(df.columns):
+            original_cols = df.columns.tolist()
+            df = df.rename(columns={
+                original_cols[0]: "x",
+                original_cols[1]: "y"
+            })
+            st.info(f"已自动识别两列数据，并将其重命名为 `x` → `{original_cols[0]}`, `y` → `{original_cols[1]}`")
+
+        # 如果超过两列 → 用户应通过 UI 选择 x,y，所以如果没选择就提醒
+        elif df.shape[1] > 2 and not {"x", "y"}.issubset(df.columns):
+            st.warning("请在左侧选择 X 和 Y 轴对应的列以继续生成散点图。")
+            return
+
+        # --- 点击生成按钮后进行绘制 ---
+        if generate_btn:
+            points = df[["x", "y"]].dropna()
+
+            fig = generate_dp_scatter_grid(
+                points=points,
+                epsilons=epsilons,
+                mechanisms=selected_mechanisms,
+                bins=bins,
+                consistent_colorscale=True,
+            )
+            st.session_state["sc_fig"] = fig
+
+        # 展示缓存里的图
+        fig = st.session_state.get("sc_fig", None)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("在左侧选择机制/参数，然后点击 **Generate scatterplots** 查看结果。")
 
 
 section = st.radio(

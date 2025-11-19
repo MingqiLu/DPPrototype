@@ -1,6 +1,6 @@
 import pandas as pd
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
+# from streamlit_extras.switch_page_button import switch_page
 import numpy as np
 import plotly.express as px
 
@@ -94,7 +94,7 @@ with tab1:
                             st.session_state['pages']['dataset'] = True
                             st.session_state.selected_dataset = loaded_datasets[dataset_name]
                             st.session_state['dataset_url'] = datasets[dataset_name]['url']
-                            switch_page("Visualizations")
+                            st.switch_page("pages/3_Visualizations.py")
 
 # Fill content for Tab 2
 from scipy.stats import norm, randint, expon
@@ -182,7 +182,7 @@ with tab2:
             # Add a button to add the synthetic dataframe to the selected dataframe of session state
             if st.button("Use Synthetic Data"):
                 st.session_state.selected_dataset = df
-                switch_page("Visualizations")
+                st.switch_page("pages/3_Visualizations.py")
         
 # with tab3:
 #     st.header('Upload Dataset')
@@ -227,7 +227,7 @@ with tab3:
                 st.success("The uploaded file is valid.")
                 if st.button("Go to Query Selection Page"):
                     st.session_state['selected_dataset'] = df
-                    switch_page("Query Selection")
+                    st.switch_page("pages/3_Visualizations.py")
         except pd.errors.EmptyDataError:
             st.error("The uploaded file is empty.")
         except pd.errors.ParserError as e:
