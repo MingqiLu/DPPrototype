@@ -1,4 +1,5 @@
 import streamlit as st
+import io
 import charts
 from NotebookCreator import create_notebook
 from streamlit_extras.switch_page_button import switch_page
@@ -12,7 +13,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 
-from dp_scatterplots import generate_dp_scatter_grid
+from dp_scatterplots import generate_dp_scatter_figs
 
 st.set_page_config(layout="wide")
 st.session_state['active_page'] = 'Visualization_page'
@@ -31,6 +32,40 @@ if st.session_state['selected_dataset'] is None:
     df = st.session_state['selected_dataset']
     st.session_state['dataset_url'] = 'https://raw.githubusercontent.com/lpanavas/DPEducationDatasets/master/PUMS_california_demographics_1000.csv'
 
+
+def generate_single_heatmap(chart, title=None):
+    """
+    chart = already computed 2D array (like Original, AHP, DAWA, Laplace)
+    df used only if title or metadata is needed (you don't need now)
+    """
+    
+    min_val = np.min(chart)
+    max_val = np.max(chart)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=chart,
+            colorscale=[[0, "rgb(255,255,255)"], [1, "rgb(3, 86, 94)"]],
+            zmin=min_val,
+            zmax=max_val,
+            showscale=False
+        )
+    )
+
+    # remove axes / ticks / borders
+    fig.update_xaxes(showticklabels=False, showline=False, zeroline=False, visible=False)
+    fig.update_yaxes(showticklabels=False, showline=False, zeroline=False, visible=False)
+
+    fig.update_layout(
+        height=200,
+        width=200,
+        autosize=False,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="white",
+        plot_bgcolor="white"
+    )
+
+    return fig
 
 # Tab 1
 def render_simulations(df):
@@ -561,6 +596,25 @@ def render_scatterplots(df):
     st.header("Scatterplots")
     col_control, col_display = st.columns([1, 3], gap="large")
 
+    # --- 自动识别/调整数据格式 ---
+    if df is None:
+        st.warning("请先选择或上传数据集。")
+        return
+
+    # 如果 dataset 只有两列，则自动把它们当作 x,y
+    if df.shape[1] == 2 and not {"x", "y"}.issubset(df.columns):
+        original_cols = df.columns.tolist()
+        df = df.rename(columns={
+            original_cols[0]: "x",
+            original_cols[1]: "y"
+        })
+        
+    # 如果超过两列 → 用户应通过 UI 选择 x,y，所以如果没选择就提醒
+    elif df.shape[1] > 2 and not {"x", "y"}.issubset(df.columns):
+        st.warning("请在左侧选择 X 和 Y 轴对应的列以继续生成散点图。")
+        return
+
+
     # ===== Left: Control Panel =====
     with col_control:
         st.subheader("Control Panel")
@@ -581,20 +635,16 @@ def render_scatterplots(df):
 
         # 2) Privacy ε – 这里 slider 控制 “中间一个 ε”，右侧网格仍然是固定几档 ε
         eps_enabled = st.checkbox("Privacy ε", value=True, key="sc_eps_enabled")
-        if eps_enabled:
-            eps_slider = st.slider(
-                "Base ε (for reference only)",
-                0.01,
-                1.00,
-                0.10,
-                0.01,
-                key="sc_eps_slider",
-                help="目前右侧展示的是一组固定的 ε= {0.5, 0.1, 0.05, 0.01}，这个 slider 只是给参与者感知用。",
-            )
-        else:
-            eps_slider = 0.1
+        eps_slider = st.slider(
+            "Base ε (for reference only)",
+            0.01,
+            1.00,
+            0.10,
+            0.01,
+            key="sc_eps_slider",
+            help="目前右侧展示的是一组固定的 ε= {0.5, 0.1, 0.05, 0.01}，这个 slider 只是给参与者感知用。",
+        )
 
-        # 这里你以后要真的联动 delta / bins / gamma 再接进模块里，目前先保留 UI
         delta_enabled = st.checkbox("Shift δ", value=False, key="sc_delta_enabled")
         power = st.slider("log10 δ", -8, -2, -6, 1, key="sc_delta_log_power")
         st.session_state["sc_delta"] = 10 ** power
@@ -614,11 +664,11 @@ def render_scatterplots(df):
         generate_btn = st.button("Generate scatterplots", key="sc_generate_btn")
 
         # 原始示例图（还可以保留）
-        st.image(
-            "image.png",
-            caption="Original Graph (reference)",
-            use_container_width=False,
-        )
+        H, _, _ = np.histogram2d(df['x'], df['y'], bins=64)
+        H = H.T
+        chart = H   
+        fig = generate_single_heatmap(chart)
+        st.plotly_chart(fig, use_container_width=True)
 
     # ===== Right: Visualization Grid =====
     with col_display:
@@ -626,44 +676,127 @@ def render_scatterplots(df):
 
         st.subheader("DP Scatter / Heatmap Grid")
 
-        # --- 自动识别/调整数据格式 ---
-        if df is None:
-            st.warning("请先选择或上传数据集。")
-            return
-
-        # 如果 dataset 只有两列，则自动把它们当作 x,y
-        if df.shape[1] == 2 and not {"x", "y"}.issubset(df.columns):
-            original_cols = df.columns.tolist()
-            df = df.rename(columns={
-                original_cols[0]: "x",
-                original_cols[1]: "y"
-            })
-            st.info(f"已自动识别两列数据，并将其重命名为 `x` → `{original_cols[0]}`, `y` → `{original_cols[1]}`")
-
-        # 如果超过两列 → 用户应通过 UI 选择 x,y，所以如果没选择就提醒
-        elif df.shape[1] > 2 and not {"x", "y"}.issubset(df.columns):
-            st.warning("请在左侧选择 X 和 Y 轴对应的列以继续生成散点图。")
-            return
-
         # --- 点击生成按钮后进行绘制 ---
         if generate_btn:
             points = df[["x", "y"]].dropna()
 
-            fig = generate_dp_scatter_grid(
-                points=points,
-                epsilons=epsilons,
-                mechanisms=selected_mechanisms,
-                bins=bins,
-                consistent_colorscale=True,
-            )
-            st.session_state["sc_fig"] = fig
+            # 1) 定义每个参数的取值（启用的 → 多值，不启用的 → 当前 slider 值）
+            delta_current = st.session_state["sc_delta"]
 
-        # 展示缓存里的图
-        fig = st.session_state.get("sc_fig", None)
-        if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("在左侧选择机制/参数，然后点击 **Generate scatterplots** 查看结果。")
+            eps_values   = epsilons if eps_enabled else [eps_slider]
+            mech_values  = selected_mechanisms if mech_enabled else [selected_mechanisms[0]]
+            delta_values = [10**i for i in range(-8, -2)] if delta_enabled else [delta_current]
+            bins_values  = [16, 32, 64, 128] if bins_enabled else [bins]
+            gamma_values = [0.5, 1.0, 2.0] if gamma_enabled else [gamma]
+
+            param_values = {
+                "mechanism": mech_values,
+                "epsilon": eps_values,
+                "delta": delta_values,
+                "bins": bins_values,
+                "gamma": gamma_values,
+            }
+
+            # 漂亮一点的显示名字
+            pretty_name = {
+                "mechanism": "Mech",
+                "epsilon": "ε",
+                "delta": "δ",
+                "bins": "Bins",
+                "gamma": "γ",
+            }
+
+            # 哪些参数是真正“在变”的
+            enabled = [k for k, v in param_values.items() if len(v) > 1]
+            n_enabled = len(enabled)
+
+            # 0/1/2 维判断
+            if n_enabled == 0:
+                # 全是固定参数，只画一张
+                values = {k: v[0] for k, v in param_values.items()}
+
+                fig_item = generate_dp_scatter_figs(
+                    points=points,
+                    epsilons=[values["epsilon"]],
+                    mechanisms=[values["mechanism"]],
+                    bins=(values["bins"], values["bins"]),
+                    consistent_colorscale=True
+                )[0]
+
+                subtitle = f"{values['mechanism']} | ε={values['epsilon']} | δ={values['delta']:.2e} | bins={values['bins']} | γ={values['gamma']}"
+                st.markdown(f"**{subtitle}**")
+                fig = fig_item["figure"]
+                fig.update_layout(width=260, height=260, margin=dict(l=0, r=0, t=10, b=0))
+                st.plotly_chart(fig, use_container_width=False)
+
+            elif n_enabled == 1:
+                # 只有一个参数变化 → 一排布局 + 顶部有该参数的标签
+                var_key = enabled[0]
+                var_vals = param_values[var_key]
+
+                # 顶部：参数标签行
+                header_cols = st.columns(len(var_vals))
+                for i, val in enumerate(var_vals):
+                    header_cols[i].markdown(f"**{pretty_name[var_key]} = {val}**")
+                    # header_cols[i].markdown(f"**{val}**")
+
+                # 下一行：对应的图
+                plot_cols = st.columns(len(var_vals))
+                for i, val in enumerate(var_vals):
+                    values = {k: v[0] for k, v in param_values.items()}
+                    values[var_key] = val
+
+                    fig_item = generate_dp_scatter_figs(
+                        points=points,
+                        epsilons=[values["epsilon"]],
+                        mechanisms=[values["mechanism"]],
+                        bins=(values["bins"], values["bins"]),
+                        consistent_colorscale=True
+                    )[0]
+
+                    fig = fig_item["figure"]
+                    fig.update_layout(width=200, height=200, margin=dict(l=0, r=0, t=10, b=0))
+                    plot_cols[i].plotly_chart(fig, use_container_width=False)
+
+            else:
+                # 有两个或以上参数变化 → 只取前两个作为矩阵的 行 / 列
+                if n_enabled > 2:
+                    st.warning("⚠️ 当前只支持最多两个参数同时变化展示矩阵，将使用前两个参数进行排布。")
+                row_key, col_key = enabled[0], enabled[1]
+                row_vals = param_values[row_key]
+                col_vals = param_values[col_key]
+
+                # 顶部 header 行：左上角放行/列说明，其余是列参数值
+                header_cols = st.columns(len(col_vals) + 1)
+                header_cols[0].markdown(f"**{pretty_name[row_key]} ↓ \n {pretty_name[col_key]} →**")
+                for j, col_val in enumerate(col_vals):
+                    # header_cols[j + 1].markdown(f"**{pretty_name[col_key]} = {col_val}**")
+                    header_cols[j + 1].markdown(f"**{col_val}**")
+
+                # 每一行：第一列是行参数值，后面是对应图
+                for i, row_val in enumerate(row_vals):
+                    row_cols = st.columns(len(col_vals) + 1)
+                    # 左边 row label
+                    # row_cols[0].markdown(f"**{pretty_name[row_key]} = {row_val}**")
+                    row_cols[0].markdown(f"**{row_val}**")
+
+                    for j, col_val in enumerate(col_vals):
+                        # 其他未变化的参数用第一个值
+                        values = {k: v[0] for k, v in param_values.items()}
+                        values[row_key] = row_val
+                        values[col_key] = col_val
+
+                        fig_item = generate_dp_scatter_figs(
+                            points=points,
+                            epsilons=[values["epsilon"]],
+                            mechanisms=[values["mechanism"]],
+                            bins=(values["bins"], values["bins"]),
+                            consistent_colorscale=True
+                        )[0]
+
+                        fig = fig_item["figure"]
+                        fig.update_layout(width=200, height=200, margin=dict(l=0, r=0, t=10, b=0))
+                        row_cols[j + 1].plotly_chart(fig, use_container_width=False)
 
 
 section = st.radio(

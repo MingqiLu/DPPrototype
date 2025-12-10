@@ -13,7 +13,8 @@ from __future__ import division, print_function
 import numpy as np
 import pandas as pd
 
-from dpcomp_core.algorithm import dawa, ahp   # 只需要算法模块
+from dpcomp_core.algorithm import dawa, ahp
+from dpcomp_core import workload
 
 from diffprivlib.tools import histogram2d
 
@@ -26,12 +27,13 @@ from plotly.subplots import make_subplots
 
 def run_dawa(points: pd.DataFrame, bins, epsilon: float, seed: int = 0) -> np.ndarray:
     """
-    运行 2D DAWA：
-    - points: 必须已经有 'x','y' 两列，连续型
-    - bins:   可以是整数；如果传的是边界数组，会用 len(bins) - 1 当作 bin 数
+    运行 2D DAWA（使用 dpcomp_core.algorithm.dawa.dawa2D_engine）：
+    - points: DataFrame，必须已经有 'x','y' 两列（数值型）
+    - bins:   可以是整数；如果传的是 bin 边界数组，则用 len(bins)-1 作为 bin 数
     - epsilon: 隐私参数
+    - seed:    随机种子
     """
-    # --- 1. 统一 bins，确保是 Python int ---
+    # ---------- 1. 统一 bins，拿到一个 Python int ----------
     if np.isscalar(bins):
         num_bins = int(bins)
     else:
@@ -43,33 +45,55 @@ def run_dawa(points: pd.DataFrame, bins, epsilon: float, seed: int = 0) -> np.nd
     if num_bins <= 0:
         raise ValueError(f"非法的 bins 值: {num_bins}")
 
-    # --- 2. 做一个干净的 2D 直方图 ---
+    # ---------- 2. 在原始网格上做一个 2D 直方图 ----------
     x = points["x"].to_numpy(dtype=float)
     y = points["y"].to_numpy(dtype=float)
 
     H, xedges, yedges = np.histogram2d(x, y, bins=num_bins)
-    H = H.astype(float, copy=False)
+    H = H.astype(float, copy=False)   # H.shape = (n1, n2)
 
-    # --- 3. 调 DAWA 的 2D 引擎 ---
-    engine = dawa.dawa2D_engine()
-    # dpcomp 的 2D DAWA 接口是：Run(hist, epsilon, seed=0)
-    # （不需要 workload，由内部自己构造）
-    x_hat = engine.Run(H, float(epsilon), int(seed))
+    # ---------- 3. 构造 DAWA 所需的 workload Q ----------
+    # 根据 dawa2D_engine.Run 的实现，它内部会：
+    #   n1, n2 = x.shape
+    #   d = 2**ceil(log2(max(n1, n2)))
+    #   query.asArray([d, d])
+    #
+    # 为了和内部逻辑兼容，我们也用同样的 d 来设置 domain_shape。
+    n1, n2 = H.shape
+    d = 2 ** int(np.ceil(np.log2(max(n1, n2))))   # >= max(n1, n2)，且是 2 的幂
+    domain_shape = (d, d)
 
-    # 保证是 numpy array
+    # 和 AHP 一致的 workload 结构，只是 domain_shape 换成 (d,d)
+    shape_list = [(5, 5), (10, 10)]
+    size = 5000
+
+    Q = workload.RandomRange(
+        shape_list=shape_list,
+        domain_shape=domain_shape,
+        size=size,
+        seed=int(seed),
+    )
+
+    # ---------- 4. 跑 DAWA 2D 引擎 ----------
+    engine = dawa.dawa2D_engine()     # ratio 默认 0.25
+
+    # 严格按照源码签名传参：Run(self, Q, x, epsilon, seed)
+    x_hat = engine.Run(Q, H, float(epsilon), int(seed))
+
+    # ---------- 5. 返回 numpy 数组 ----------
     return np.asarray(x_hat, dtype=float)
 
 
 def run_ahp(points: pd.DataFrame, bins: int, epsilon: float) -> np.ndarray:
     """
-    AHP 机制。
+    AHP 机制（使用 dpcomp_core.algorithm.ahp.ahpND_engine）。
     """
     domain = (bins, bins)
     seed = 1
     shape_list = [(5, 5), (10, 10)]
     size = 5000
 
-    w = workload.RandomRange(   # 这一块还是沿用你原来 notebook 的 AHP 用法
+    w = workload.RandomRange(
         shape_list=shape_list,
         domain_shape=domain,
         size=size,
@@ -129,21 +153,22 @@ def compute_histogram(points, mechanism: str, bins: int, epsilon: float):
         return _MECH_FUNC_MAP[mechanism](points, bins, epsilon)
 
 
-# =========  生成网格图的主函数  =========
+# =========  返回「一系列图片」的主函数  =========
 
-def generate_dp_scatter_grid(
+def generate_dp_scatter_figs(
     points: pd.DataFrame,
     epsilons=(0.5, 0.1, 0.05, 0.01),
     mechanisms=("AHP", "DAWA", "Laplace"),
-    bins: int = 64,
+    bins=(32, 64),
     consistent_colorscale: bool = True,
-) -> go.Figure:
+    progress_callback=None,
+):
     """
-    生成一个 rows = len(mechanisms), cols = len(epsilons) 的 Heatmap 网格，
-    每个 cell 是对应机制 + epsilon 下的 2D 直方图。
+    生成一系列 Plotly Figure，每个 figure 对应一个 (mechanism, epsilon, bin)。
 
-    返回一个 Plotly Figure，供 Streamlit 直接 plotly_chart。
-    points: 需要包含 'x', 'y' 两列
+    返回：
+        一个 list，其中每个元素是
+        {"mechanism": <str>, "epsilon": <float>, "figure": <go.Figure>}
     """
     charts = {}
     all_vals = []
@@ -151,11 +176,20 @@ def generate_dp_scatter_grid(
     epsilons = list(epsilons)
     mechanisms = list(mechanisms)
 
+    total = len(mechanisms) * len(epsilons)
+    done = 0
+
+    # 先算出所有直方图（这一步最耗时），顺便可以更新进度条
     for mech in mechanisms:
         for eps in epsilons:
-            hist = compute_histogram(points, mech, bins, eps)
-            charts[(mech, eps)] = hist
-            all_vals.append(hist)
+            for bin in bins:
+                hist = compute_histogram(points, mech, bin, eps)
+                charts[(mech, eps, bin)] = hist
+                all_vals.append(hist)
+
+                done += 1
+                if progress_callback is not None:
+                    progress_callback(done / total)
 
     # 统一颜色范围，方便比较
     if consistent_colorscale and all_vals:
@@ -165,79 +199,55 @@ def generate_dp_scatter_grid(
     else:
         global_min = global_max = center = None
 
-    fig = make_subplots(
-        rows=len(mechanisms),
-        cols=len(epsilons),
-        horizontal_spacing=0.02,
-        vertical_spacing=0.06,
-    )
-
     teal_colorscale = [
         [0.0, "rgb(255,255,255)"],
         [1.0, "rgb(3, 86, 94)"],
     ]
 
-    for row, mech in enumerate(mechanisms, start=1):
-        for col, eps in enumerate(epsilons, start=1):
-            z = charts[(mech, eps)]
+    fig_items = []
 
-            fig.add_trace(
-                go.Heatmap(
-                    z=z,
-                    colorscale=teal_colorscale,
-                    zmin=-center if center is not None else None,
-                    zmax=center if center is not None else None,
-                    showscale=False,
-                ),
-                row=row,
-                col=col,
-            )
+    for mech in mechanisms:
+        for eps in epsilons:
+            for bin in bins:
+                z = charts[(mech, eps, bin)]
 
-    # 顶部 ε 标签
-    for col, eps in enumerate(epsilons, start=1):
-        fig.add_annotation(
-            xref="x domain",
-            yref="paper",
-            x=(col - 0.5) / len(epsilons),
-            y=1.05,
-            showarrow=False,
-            text=f"ε={eps}",
-            font=dict(size=18),
-        )
+                fig = go.Figure(
+                    data=[
+                        go.Heatmap(
+                            z=z,
+                            colorscale=teal_colorscale,
+                            zmin=-center if center is not None else None,
+                            zmax=center if center is not None else None,
+                            showscale=False,
+                        )
+                    ]
+                )
 
-    # 左侧机制标签
-    for row, mech in enumerate(mechanisms, start=1):
-        fig.add_annotation(
-            xref="paper",
-            yref="y domain",
-            x=-0.03,
-            y=(row - 0.5) / len(mechanisms),
-            showarrow=False,
-            text=mech,
-            font=dict(size=18),
-        )
+                fig.update_xaxes(
+                    showline=True,
+                    linewidth=1,
+                    linecolor="darkgrey",
+                    mirror=True,
+                    showticklabels=False,
+                )
+                fig.update_yaxes(
+                    showline=True,
+                    linewidth=1,
+                    linecolor="darkgrey",
+                    mirror=True,
+                    showticklabels=False,
+                )
 
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="darkgrey",
-        mirror=True,
-        showticklabels=False,
-    )
-    fig.update_yaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="darkgrey",
-        mirror=True,
-        showticklabels=False,
-    )
+                fig.update_layout(
+                    height=250,
+                    width=250,
+                    margin=dict(l=20, r=10, t=10, b=20),
+                    plot_bgcolor="rgb(255,255,255)",
+                    paper_bgcolor="rgb(255,255,255)",
+                )
 
-    fig.update_layout(
-        height=600,
-        width=1200,
-        margin=dict(l=40, r=20, t=60, b=40),
-        plot_bgcolor="rgb(255,255,255)",
-        paper_bgcolor="rgb(255,255,255)",
-    )
+                fig_items.append(
+                    {"mechanism": mech, "epsilon": eps, "bin": bin, "figure": fig}
+                )
 
-    return fig
+    return fig_items

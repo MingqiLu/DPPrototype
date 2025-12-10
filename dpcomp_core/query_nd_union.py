@@ -92,7 +92,7 @@ class ndRangeUnion(object):
             shape = self.impliedShape
         array = numpy.zeros(shape)
         for r in self.ranges:
-            array[ndRangeUnion.slice(r)] += r.wgt
+            array[tuple(ndRangeUnion.slice(r))] += r.wgt
         return array
 
     def sens(self):
